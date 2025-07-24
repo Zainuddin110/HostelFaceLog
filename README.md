@@ -14,6 +14,7 @@ A modern, full-stack hostel attendance solution using face recognition. Built wi
 - **Download Logs:** Export all entry/exit logs as Excel.
 - **User-friendly Dashboard:** Clean, modern interface with live metrics and charts.
 - **Local SQLite Database:** All data stored securely and locally.
+- **Visitor Detection:** I t detects unknown faces and stores their snapshot in unknown entries.
 
 ---
 
