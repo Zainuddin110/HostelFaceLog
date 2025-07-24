@@ -1,3 +1,5 @@
+import os
+from PIL import Image
 import streamlit as st
 import pandas as pd
 import io
@@ -56,13 +58,21 @@ def room_sort_key(room):
         return (m.group(1), int(m.group(2)))
     return (room, 0)
 
+def count_unknown_visitors_today():
+    folder = "unknown_entries"
+    if not os.path.exists(folder):
+        return 0
+    today = datetime.datetime.now().strftime("%Y%m%d")
+    return len([f for f in os.listdir(folder) if f.startswith(f"visitor.{today}") and f.endswith(".jpg")])
+
 PAGE_DICT = {
     "Dashboard": "📊 Dashboard",
     "Entry Camera": "👤 Entry",
     "Exit Camera": "🚪 Exit",
     "Register Student": "📝 Register",
     "Registered Students": "👨‍🎓 Students",
-    "Logs": "🗂️ Logs"
+    "Logs": "🗂️ Logs",
+    "Unknown Entries": "🙎🏻 Visitors"
 }
 PAGES = list(PAGE_DICT.keys())
 
@@ -95,12 +105,14 @@ if page == "Dashboard":
         df['date'] = pd.to_datetime(df['Timestamp']).dt.date
         entries_today = df[(df['Action'] == 'entry') & (df['date'] == datetime.date.today())].shape[0]
         exits_today = df[(df['Action'] == 'exit') & (df['date'] == datetime.date.today())].shape[0]
+        visitors_today = df[(df['Action'] == 'Visitors') & (df['date'] == datetime.date.today())].shape[0]
     else:
         entries_today = 0
         exits_today = 0
+        visitors_today = 0
 
     # Row of metrics with emojis and daily info
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown('<span style="font-size:1.4em"><b>Students Inside</b></span>', unsafe_allow_html=True)
         st.markdown(f'<div style="font-size:2.7em; font-weight:700; margin-top:-15px;">{len(inside)}</div>', unsafe_allow_html=True)
@@ -113,6 +125,14 @@ if page == "Dashboard":
         msg = f'↑ {exits_today} exits today' if exits_today > 0 else "↑ No exits today"
         st.markdown(f'<span style="color: #16a34a; font-size:1em;">{msg}</span>', unsafe_allow_html=True)
 
+    with col3:
+        visitors_today = count_unknown_visitors_today()
+        st.markdown('<span style="font-size:1.4em"><b>Visitors Detected Today</b></span>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:2.7em; font-weight:700; margin-top:-15px; color:#eab308;">{visitors_today}</div>', unsafe_allow_html=True)
+        msg = f'↑ {visitors_today} visitors today' if visitors_today > 0 else "↑ No Visitors today"
+        st.markdown(f'<span style="color: #eab308; font-size:1em;">{msg}</span>', unsafe_allow_html=True)
+
+
     st.markdown('<h2 style="margin-top:18px; margin-bottom:0.7em;"><span style="font-size:1.3em;">📊</span> <span style="color:#2563eb;">Current Status Distribution</span></h2>', unsafe_allow_html=True)
 
     # ----- PIE CHART FOR INDIDE HOSTEL AND STUDENTS INSIDE BY ROOM -----
@@ -122,7 +142,7 @@ if page == "Dashboard":
         room_dict[student['room']].append(student['name'])
     room_counts = {room: len(names) for room, names in room_dict.items()}
 
-    col1, col2 = st.columns([1, 1.3])  # 1 for pie, 1.3 for bar
+    col1, col2 = st.columns([1, 1])  # 1 for pie, 1.3 for bar
 
     with col1:
         st.markdown("#### Status Pie Chart")
@@ -138,7 +158,6 @@ if page == "Dashboard":
                 autopct='%1.0f%%',
                 startangle=120,
                 wedgeprops={'edgecolor': 'white', 'linewidth': 0},
-                shadow=True,
                 pctdistance=0.67
             )
             centre_circle = plt.Circle((0, 0), 0.50, fc='#181c20', zorder=10)
@@ -150,13 +169,64 @@ if page == "Dashboard":
             st.pyplot(fig)
 
     with col2:
-        st.markdown('<h3 style="margin-top:1.5em; color:#22c55e;">Students Currently Inside By Room</h3>', unsafe_allow_html=True)
+        st.subheader("Student Status Table")
+        status_df = pd.DataFrame({
+            "id": [s['id'] for s in students],
+            "Name": [s['name'] for s in students],
+            "Room": [s['room'] for s in students],
+            "Status": [("Inside" if s['name'] in inside else "Outside") for s in students]
+        })
+        def color_status(val):
+            color = '#22c55e' if val == 'Inside' else '#ef4444'
+            return f'background-color: {color}; color: #fff'
+        
+        status_df = status_df.reset_index(drop=True)
+
+        # Show color table if possible
+        try:
+            st.dataframe(status_df.style.map(color_status, subset=['Status']))
+        except Exception:
+            st.dataframe(status_df)
+
+    # --- Student Status Table & Room Occupancy Donut Chart Side by Side ---
+    colA, colB = st.columns([1, 1])  # 1 for pie, 1.3 for bar
+
+    with colA:
+        st.subheader("Room Occupancy Pie Chart")
         if not inside_students:
-            st.info("No students are currently inside.")
+            st.info("No students are currently inside any room.")
         else:
-            st.markdown("#### Roomwise Students Inside")
-            room_df = pd.DataFrame(list(room_counts.items()), columns=["Room", "Students Inside"])
-            st.bar_chart(room_df.set_index("Room"))
+            room_counts = {room: len(names) for room, names in room_dict.items()}
+            labels = list(room_counts.keys())
+            sizes = list(room_counts.values())
+            colors = plt.cm.Paired(np.arange(len(labels)))
+            
+            def label_formatter(pct, allvals):
+                absolute = int(round(pct/100.*np.sum(allvals)))
+                i = label_formatter.idx
+                label = labels[i]
+                label_formatter.idx += 1
+                return f"{label}\n{pct:.1f}%"
+            label_formatter.idx = 0
+
+            fig, ax = plt.subplots(figsize=(8, 8))
+            wedges, texts, autotexts = ax.pie(
+                sizes,
+                labels=None,  # We'll show in autopct!
+                colors=colors,
+                autopct=lambda pct: label_formatter(pct, sizes),
+                startangle=120,
+                wedgeprops={'edgecolor': 'white', 'linewidth': 0},
+                pctdistance=0.72
+            )
+            label_formatter.idx = 0  # reset for redraws
+            centre_circle = plt.Circle((0, 0), 0.50, fc='#181c20', zorder=10)
+            fig.gca().add_artist(centre_circle)
+            plt.setp(texts, color='#333', weight='bold')
+            plt.setp(autotexts, color='#fff', weight='bold', fontsize=20)
+            ax.set(aspect="equal")
+            fig.patch.set_facecolor('none')
+            st.pyplot(fig)
 
             st.markdown("#### Detailed Room Occupancy")
             for room, names in sorted(room_dict.items()):
@@ -166,13 +236,15 @@ if page == "Dashboard":
                     unsafe_allow_html=True
                 )
 
-    st.subheader("🔎 Latest Logs")
-    st.dataframe(df, use_container_width=True, height=270)
+    with colB:
+        st.markdown('<h3 style="margin-top:1.5em; color:#22c55e;">Students Currently Inside By Room</h3>', unsafe_allow_html=True)
+        if not inside_students:
+            st.info("No students are currently inside.")
+        else:
+            st.markdown("#### Roomwise Students Inside")
+            room_df = pd.DataFrame(list(room_counts.items()), columns=["Room", "Students Inside"])
+            st.bar_chart(room_df.set_index("Room"))
 
-    excel_buffer = io.BytesIO()
-    df.to_excel(excel_buffer, index=False)
-    excel_buffer.seek(0)
-    st.download_button("Download Logs as Excel", excel_buffer, "hostel_logs.xlsx")
 
 # === ENTRY CAMERA (Continuous) ===
 elif page == "Entry Camera":
@@ -215,7 +287,17 @@ elif page == "Entry Camera":
                     if sid and (sid not in st.session_state.entry_logged_ids):
                         add_log(sid, sname, "entry")
                         st.session_state.entry_logged_ids.add(sid)
-                        status_msg = f"✅ <b>{sname}</b> marked as <b>ENTRY</b> at {datetime.datetime.now().strftime('%H:%M:%S')}"
+                        status_msg = f"✅ <b>{sname}</b> has ENTERED Hostel at {datetime.datetime.now().strftime('%H:%M:%S')}"
+                    elif sid is None:
+                        # Unknown face detected
+                        status_msg = "<span style='color:#eab308'>⚠️ Unknown person detected!</span>"
+                        # Optional: Save snapshot of unknown face (uncomment if you want this)
+                        face_img = frame[y1:y2, x1:x2]
+                        import os
+                        if not os.path.exists("unknown_entries"):
+                            os.makedirs("unknown_entries")
+                            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                            cv2.imwrite(f"unknown_entries/visitor.{timestamp}.jpg", face_img)
             # --- Set the message above the live feed ---
             if status_msg:
                 message_placeholder.markdown(f'<div style="font-size:1.5em; color:#16a34a;">{status_msg}</div>', unsafe_allow_html=True)
@@ -258,14 +340,23 @@ elif page == "Exit Camera":
             status_msg = ""
             for box in boxes:
                 x1, y1, x2, y2 = box
-                cv2.rectangle(frame_display, (x1, y1), (x2, y2), (200,0,30), 2)
+                cv2.rectangle(frame_display, (x1, y1), (x2, y2), (200, 0, 30), 2)  # red rectangle for EXIT
                 encoding = encode_face(frame, box)
                 if encoding is not None:
                     sid, sname = recognize_face(encoding, known_students)
                     if sid and (sid not in st.session_state.exit_logged_ids):
                         add_log(sid, sname, "exit")
                         st.session_state.exit_logged_ids.add(sid)
-                        status_msg = f"🚪 <b>{sname}</b> has LEFT at {datetime.datetime.now().strftime('%H:%M:%S')}"
+                        status_msg = f"🚪 <b>{sname}</b> has EXITED Hostel at {datetime.datetime.now().strftime('%H:%M:%S')}"
+                    elif sid is None:
+                        # Unknown face detected
+                        status_msg = "<span style='color:#eab308'>⚠️ Unknown person detected!</span>"
+                        face_img = frame[y1:y2, x1:x2]
+                        import os
+                        if not os.path.exists("unknown_entries"):
+                            os.makedirs("unknown_entries")
+                        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                        cv2.imwrite(f"unknown_entries/visitor_exit.{timestamp}.jpg", face_img)
             # --- Set the message above the live feed ---
             if status_msg:
                 message_placeholder.markdown(
@@ -346,3 +437,30 @@ elif page == "Logs":
     df.to_excel(excel_buffer, index=False)
     excel_buffer.seek(0)
     st.download_button("Download Logs as Excel", excel_buffer, "hostel_logs.xlsx")
+
+#==UNKNOWN ENTRIES==
+elif page == "Unknown Entries":
+    st.markdown('<div class="big-title">Visitors</div>', unsafe_allow_html=True)
+    unknown_folder = "unknown_entries"
+
+    if os.path.exists(unknown_folder) and os.listdir(unknown_folder):
+        unknown_files = sorted(os.listdir(unknown_folder), reverse=True)[:30]  # Show latest 30
+        cols = st.columns(5)
+        for i, filename in enumerate(unknown_files):
+            with cols[i % 5]:
+                img_path = os.path.join(unknown_folder, filename)
+                img = Image.open(img_path)
+                st.image(img, caption=filename, width=110)
+                # Optional: Show a delete button for admin
+                if st.button(f"Delete {filename}", key=f"del_{filename}"):
+                    os.remove(img_path)
+    else:
+        st.info("No unknown faces detected yet.")
+
+st.sidebar.markdown("""
+    <hr style='margin:1.2em 0 0.5em 0; border: none; border-top: 2px solid #3b82f6;'>
+    <div style='color: #6ee7b7; text-align:center; font-size:1.08em; font-weight:600; margin-top:0.6em; letter-spacing:1px;'>
+        Made by <span style="color:#3b82f6;"><b>Zainuddin</b></span> <br>
+        <span style="font-size:0.97em; color:#64748b;">2025</span>
+    </div>
+""", unsafe_allow_html=True)
